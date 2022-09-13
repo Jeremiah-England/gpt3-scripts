@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import subprocess
+import openai
+import argparse
+
+
+# Prompt source/attribution: https://twitter.com/sergeykarayev/status/1569377881440276481
+PROMPT_TEMPLATE = """
+Your task is to answer questions correctly. You have access to a Python interpreter, so if you are not able to answer a question from memory, you can write a program that answers the question. Always write your answer as a valid Python program. The program must explain what it's doing and why.
+
+Begin.
+
+Question: What is 37593 * 67?
+Answer:
+```
+# Multiply the numbers
+print(37593 * 67)
+```
+
+Question: What year was the American president George Washington born?
+Answer:
+```
+print(1732)
+```
+
+Question: ###QUESTION###
+Answer:
+```
+"""
+
+
+def convert_tokens_to_dollars(tokens: int) -> float:
+    """Calculate the cost in dollars for a certain number of tokens.
+
+    For the Davinci model. See https://openai.com/api/pricing.
+    """
+    dollars_per_token = 0.02 / 1_000
+    return tokens * dollars_per_token
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("prompt")
+    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("-f", "--force", action="store_true")
+    args = parser.parse_args()
+
+    prompt = args.prompt
+    # if args.prompt:
+    #     prompt = args.prompt
+    # else:
+    #     prompt = sys.stdin.read()
+    prompt = prompt.strip()
+
+    complete_prompt = PROMPT_TEMPLATE.replace("###QUESTION###", prompt).strip()
+
+    if args.verbose:
+        print(complete_prompt, file=sys.stderr)
+
+    response = openai.Completion.create(
+        model="text-davinci-002",
+        prompt=complete_prompt,
+        temperature=0,
+        max_tokens=512,
+        stop="```",
+    )
+    response_text = response["choices"][0]["text"]  # type: ignore
+
+    if args.verbose:
+        print(response, file=sys.stderr)
+
+    print(f'Cost: ${convert_tokens_to_dollars(response["usage"]["total_tokens"]):0.5f}')
+
+    do_exec = False
+    if args.force:
+        print("forcing it!")
+        do_exec = False  # Change to True later.
+    else:
+        print(response_text, file=sys.stderr)
+        answer = input(
+            "Would you like to execute the preceeding Python and print the result or open in your editor? [Y/n/e] "
+        )
+        if not answer or answer.lower()[0] == "y":
+            do_exec = True
+        elif answer.lower()[0] == "e":
+            editor = os.environ.get("EDITOR")
+            if not editor:
+                print("Please define the EDITOR environment variable.")
+                exit(1)
+            temp_file = f"/tmp/gpt_{hash(response_text)}.py"
+            with open(temp_file, "w") as f:
+                f.write(response_text)
+            subprocess.call([editor, temp_file])
+            exit()  # Assume that the user ran the script from his editor for now.
+
+    if do_exec:
+        exec(response_text)
